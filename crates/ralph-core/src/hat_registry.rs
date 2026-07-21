@@ -144,7 +144,14 @@ impl HatRegistry {
             .any(|pub_topic| pub_topic.matches_str(topic))
     }
 
-    /// Returns the first hat subscribed to the given topic.
+    /// Returns a hat subscribed to the given topic, preferring a hat with a
+    /// specific (non-global-wildcard) subscription over one that only
+    /// matches via a global `*` wildcard — mirroring the priority
+    /// `EventBus::publish()` already implements (`crates/ralph-proto/src/event_bus.rs`,
+    /// `has_specific_subscription` before falling back to wildcard-only
+    /// matches). Without this, first-match-over-a-sorted-map could return
+    /// an alphabetically-earlier wildcard subscriber instead of the hat
+    /// whose `triggers` actually name this topic.
     ///
     /// Uses prefix index for O(1) early-exit when the topic prefix doesn't match
     /// any subscription pattern.
@@ -160,8 +167,17 @@ impl HatRegistry {
             }
         }
 
-        // Fall back to full linear scan (BTreeMap is already sorted by key)
-        self.hats.values().find(|hat| hat.is_subscribed_str(topic))
+        let topic_obj = Topic::new(topic);
+        let mut fallback: Option<&Hat> = None;
+        for hat in self.hats.values() {
+            if hat.has_specific_subscription(&topic_obj) {
+                return Some(hat);
+            }
+            if fallback.is_none() && hat.is_subscribed_str(topic) {
+                fallback = Some(hat);
+            }
+        }
+        fallback
     }
 }
 

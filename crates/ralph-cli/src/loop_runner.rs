@@ -2034,7 +2034,12 @@ pub async fn run_loop_impl(
         // Process output; cost must be added before termination checks so
         // max_cost applies across iterations and across --continue resumes.
         event_loop.add_cost(outcome.total_cost_usd);
-        let termination = event_loop.process_output(&hat_id, &output, success);
+        // Use display_hat (the active hat), not the multi-hat-mode-constant
+        // hat_id ("ralph") — process_output() feeds this into last_hat
+        // bookkeeping, which inject_fallback_event() and
+        // audit_file_modifications() both rely on to target recovery/audit
+        // back to the real hat instead of always falling back untargeted.
+        let termination = event_loop.process_output(&display_hat, &output, success);
         if let Err(e) = event_loop.save_loop_state(&loop_state_path) {
             warn!("Failed to persist loop state: {}", e);
         }
