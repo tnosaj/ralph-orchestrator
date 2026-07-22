@@ -2364,6 +2364,45 @@ hats:
 }
 
 #[test]
+fn test_get_active_hat_id_prefers_most_recent_event_over_alphabetical_order() {
+    // Reproduces the "recurring misroute" pattern (caveats-ralph.md /
+    // ralph-todo.md): a hat that sorts alphabetically BEFORE another hat
+    // has a stale pending event (e.g. its own `default_publishes`
+    // self-retrigger) while the OTHER, alphabetically-later hat receives a
+    // genuinely newer event. Before the fix, alphabetical hat-id order won
+    // regardless of recency; the fix orders by publish sequence instead.
+    let yaml = r#"
+hats:
+  fixer:
+    name: "Fixer"
+    triggers: ["build.blocked"]
+  reviewer:
+    name: "Reviewer"
+    triggers: ["build.done"]
+"#;
+    let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut event_loop = EventLoop::new(config);
+
+    // "fixer" sorts alphabetically before "reviewer" — publish fixer's
+    // (stale/leftover) event FIRST, then reviewer's genuinely newer event.
+    event_loop
+        .bus
+        .publish(Event::new("build.blocked", "fixer's own stale retrigger"));
+    event_loop
+        .bus
+        .publish(Event::new("build.done", "reviewer's fresh event"));
+
+    // Despite "fixer" < "reviewer" alphabetically, the most recently
+    // published event (reviewer's build.done) must win.
+    let active = event_loop.get_active_hat_id();
+    assert_eq!(
+        active.as_str(),
+        "reviewer",
+        "should prefer the most recently published event's hat over whichever hat sorts first alphabetically"
+    );
+}
+
+#[test]
 fn test_get_active_hat_id_matches_prompt_active_hat_selection() {
     let yaml = r#"
 hats:

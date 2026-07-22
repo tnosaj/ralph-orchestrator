@@ -29,6 +29,22 @@ pub struct Event {
     /// Total number of events in the wave.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wave_total: Option<u32>,
+
+    /// Monotonic publish-order sequence number, stamped by `EventBus::publish`.
+    /// Used to order events by actual recency across DIFFERENT hats' pending
+    /// queues, since each hat's queue is a separate `Vec` with no relative
+    /// ordering to any other hat's queue otherwise. Without this, gathering
+    /// pending events across hats (`build_prompt`'s multi-hat branch,
+    /// `peek_pending_regular_events`) falls back to alphabetical hat-id
+    /// order, which can present a stale event (e.g. a hat's own
+    /// `default_publishes` self-retrigger) ahead of a genuinely newer event
+    /// for a different, alphabetically-later hat — confirmed root cause of
+    /// the "recurring misroute" pattern (see caveats-ralph.md). Defaults to
+    /// 0 for events that never go through `publish` (e.g. hat-exhaustion
+    /// notices added directly to the prompt context) and for events
+    /// deserialized from event logs written before this field existed.
+    #[serde(default)]
+    pub seq: u64,
 }
 
 impl Event {
@@ -42,6 +58,7 @@ impl Event {
             wave_id: None,
             wave_index: None,
             wave_total: None,
+            seq: 0,
         }
     }
 

@@ -1187,6 +1187,19 @@ impl EventLoop {
                     all_events.extend(pending);
                 }
 
+                // `all_hat_ids` (and therefore the order events were just
+                // gathered in) is alphabetical, not chronological — a hat's
+                // own leftover/self-retriggered event (e.g. fixer's
+                // `default_publishes`) can sort ahead of a genuinely newer
+                // event for a different, alphabetically-later hat (e.g.
+                // reviewer's `build.done`). Sort by recency (newest first)
+                // before `determine_active_hat_ids` picks which hat(s) are
+                // "active" this iteration, so the freshest event's hat is
+                // preferred instead of whichever hat merely sorts first
+                // alphabetically. Root cause of the "recurring misroute"
+                // pattern — see caveats-ralph.md / ralph-todo.md.
+                all_events.sort_by_key(|e| std::cmp::Reverse(e.seq));
+
                 let mut human_events = self.bus.take_human_pending();
                 all_events.append(&mut human_events);
 
@@ -1854,6 +1867,14 @@ impl EventLoop {
                 events.extend(pending.iter().cloned());
             }
         }
+        // `bus.hat_ids()` iterates in alphabetical HatId order (BTreeMap),
+        // which has no relation to when each hat's event was actually
+        // published. Sort by recency (newest first) so `get_active_hat_id`
+        // (and anything else consuming this) prefers the hat with the most
+        // recently published event over whichever hat merely sorts first
+        // alphabetically. Root cause of the "recurring misroute" pattern —
+        // see caveats-ralph.md / ralph-todo.md.
+        events.sort_by_key(|e| std::cmp::Reverse(e.seq));
         events
     }
 

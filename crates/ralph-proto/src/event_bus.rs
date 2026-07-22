@@ -25,6 +25,14 @@ pub struct EventBus {
     /// Observers that receive all published events.
     /// Multiple observers can be registered (e.g., session recorder + TUI).
     observers: Vec<Observer>,
+
+    /// Monotonic counter stamped onto each published event's `seq` field.
+    /// Gives a total order across ALL hats' separate pending queues, so
+    /// code that gathers pending events from multiple hats at once (e.g.
+    /// `EventLoop::peek_pending_regular_events`, `EventLoop::build_prompt`'s
+    /// multi-hat branch) can order by actual recency instead of falling
+    /// back to alphabetical hat-id order.
+    next_seq: u64,
 }
 
 impl EventBus {
@@ -77,6 +85,13 @@ impl EventBus {
     /// If an observer is set, it receives the event before routing.
     #[allow(clippy::needless_pass_by_value)] // Event is cloned to multiple recipients
     pub fn publish(&mut self, event: Event) -> Vec<HatId> {
+        // Stamp the publish-order sequence before anything else touches the
+        // event, so every branch below (human.*, direct target, specific vs.
+        // wildcard routing) sees the same, correctly-ordered event.
+        let mut event = event;
+        event.seq = self.next_seq;
+        self.next_seq += 1;
+
         // Notify all observers before routing
         for observer in &self.observers {
             observer(&event);
