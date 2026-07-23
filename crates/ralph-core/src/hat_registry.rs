@@ -114,15 +114,23 @@ impl HatRegistry {
             .collect()
     }
 
-    /// Finds the first hat that would be triggered by a topic.
-    /// Returns the hat ID if found, used for event logging.
-    /// BTreeMap iteration is already sorted by key.
+    /// Finds the hat that would be triggered by a topic, used for event
+    /// logging. Mirrors `get_for_topic`'s specificity priority: a hat with a
+    /// specific (non-global-wildcard) subscription wins over one that only
+    /// matches via a global `*` wildcard, instead of first-match over the
+    /// BTreeMap's alphabetical order.
     pub fn find_by_trigger(&self, topic: &str) -> Option<&HatId> {
-        let topic = Topic::new(topic);
-        self.hats
-            .values()
-            .find(|hat| hat.is_subscribed(&topic))
-            .map(|hat| &hat.id)
+        let topic_obj = Topic::new(topic);
+        let mut fallback: Option<&HatId> = None;
+        for hat in self.hats.values() {
+            if hat.has_specific_subscription(&topic_obj) {
+                return Some(&hat.id);
+            }
+            if fallback.is_none() && hat.is_subscribed(&topic_obj) {
+                fallback = Some(&hat.id);
+            }
+        }
+        fallback
     }
 
     /// Returns true if any hat is subscribed to the given topic.
@@ -389,6 +397,33 @@ hats:
             hat_id.unwrap().as_str(),
             "alpha",
             "find_by_trigger should return alphabetically first matching hat"
+        );
+    }
+
+    #[test]
+    fn test_find_by_trigger_prefers_specific_subscription_over_wildcard() {
+        // "alpha" only has a global wildcard, "zebra" has a specific
+        // subscription to this topic. Alphabetically alpha sorts first in
+        // the BTreeMap, but the specific subscriber should win — same
+        // priority get_for_topic already implements.
+        let yaml = r#"
+hats:
+  alpha:
+    name: "Alpha"
+    triggers: ["*"]
+  zebra:
+    name: "Zebra"
+    triggers: ["task.*"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+
+        let hat_id = registry.find_by_trigger("task.start");
+        assert!(hat_id.is_some());
+        assert_eq!(
+            hat_id.unwrap().as_str(),
+            "zebra",
+            "find_by_trigger should prefer the specific subscriber over the alphabetically-first wildcard-only one"
         );
     }
 
