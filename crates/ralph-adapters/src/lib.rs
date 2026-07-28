@@ -33,6 +33,7 @@ mod cli_backend;
 mod cli_executor;
 mod copilot_stream;
 mod json_rpc_handler;
+mod opencode_stream;
 mod pi_stream;
 mod pty_executor;
 pub mod pty_handle;
@@ -51,6 +52,10 @@ pub use cli_backend::{CliBackend, CustomBackendError, OutputFormat, PromptMode};
 pub use cli_executor::{CliExecutor, ExecutionResult};
 pub use copilot_stream::{CopilotAssistantMessage, CopilotStreamEvent, CopilotStreamParser};
 pub use json_rpc_handler::{JsonRpcStreamHandler, stdout_json_rpc_handler};
+pub use opencode_stream::{
+    OpencodeCacheTokens, OpencodeStreamEvent, OpencodeStreamParser, OpencodeTokens,
+    command_is_ralph_emit,
+};
 pub use pi_stream::{
     PiAssistantEvent, PiContentBlock, PiCost, PiSessionState, PiStreamEvent, PiStreamParser,
     PiToolResult, PiTurnMessage, PiUsage, dispatch_pi_stream_event,

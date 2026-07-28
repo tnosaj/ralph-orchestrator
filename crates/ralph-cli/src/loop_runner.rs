@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 use ralph_adapters::{
     AcpExecutor, ClaudeStreamEvent, ClaudeStreamParser, CliBackend, CliExecutor,
     ConsoleStreamHandler, ContentBlock, CopilotStreamParser, JsonRpcStreamHandler,
-    OutputFormat as BackendOutputFormat, PiAssistantEvent, PiContentBlock, PiStreamEvent,
-    PiStreamParser, PrettyStreamHandler, PtyConfig, PtyExecutor, QuietStreamHandler, StreamHandler,
-    TuiStreamHandler,
+    OpencodeStreamEvent, OpencodeStreamParser, OutputFormat as BackendOutputFormat,
+    PiAssistantEvent, PiContentBlock, PiStreamEvent, PiStreamParser, PrettyStreamHandler,
+    PtyConfig, PtyExecutor, QuietStreamHandler, StreamHandler, TuiStreamHandler,
 };
 use ralph_core::diagnostics::{HookDisposition, HookRunTelemetryEntry};
 use ralph_core::{
@@ -1835,13 +1835,13 @@ pub async fn run_loop_impl(
                     ),
                     success: result.success,
                     termination: None,
-                    total_cost_usd: 0.0,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_read_tokens: 0,
-                    cache_write_tokens: 0,
+                    total_cost_usd: result.total_cost_usd,
+                    input_tokens: result.input_tokens,
+                    output_tokens: result.output_tokens,
+                    cache_read_tokens: result.cache_read_tokens,
+                    cache_write_tokens: result.cache_write_tokens,
                     context_window: context_window_for_backend(&config, &backend_name_for_timeout),
-                    context_tokens: 0,
+                    context_tokens: result.input_tokens,
                     num_turns: 0,
                 })
             }
@@ -4186,8 +4186,37 @@ fn normalize_cli_output_for_parsing(
         BackendOutputFormat::StreamJson => extract_claude_stream_text(raw_output),
         BackendOutputFormat::CopilotStreamJson => CopilotStreamParser::extract_all_text(raw_output),
         BackendOutputFormat::PiStreamJson => extract_pi_stream_text(raw_output),
+        BackendOutputFormat::OpencodeStreamJson => extract_opencode_stream_text(raw_output),
         _ => raw_output.to_string(),
     }
+}
+
+fn extract_opencode_stream_text(raw_output: &str) -> String {
+    let mut extracted = String::new();
+    for line in raw_output.lines() {
+        match OpencodeStreamParser::parse_line(line) {
+            Some(OpencodeStreamEvent::Text { text }) => {
+                extracted.push_str(&text);
+                extracted.push('\n');
+            }
+            Some(OpencodeStreamEvent::ToolUse {
+                tool,
+                command,
+                output,
+                ..
+            }) => {
+                extracted.push_str(&format!("⚙ {tool}({})\n", command.unwrap_or_default()));
+                if let Some(output) = output {
+                    extracted.push_str(&output);
+                    if !output.ends_with('\n') {
+                        extracted.push('\n');
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    extracted
 }
 
 fn extract_claude_stream_text(raw_output: &str) -> String {
@@ -6250,6 +6279,14 @@ fn extract_readable_delta(line: &str, output_format: BackendOutputFormat) -> Opt
                     Some(format!("→ {}\n", truncate_wave_worker_preview(&output)))
                 }
             }
+            _ => None,
+        },
+        BackendOutputFormat::OpencodeStreamJson => match OpencodeStreamParser::parse_line(line) {
+            Some(OpencodeStreamEvent::Text { text }) => Some(format!("{text}\n")),
+            Some(OpencodeStreamEvent::ToolUse { tool, command, .. }) => Some(format!(
+                "⚙ {tool}({})\n",
+                command.unwrap_or_default()
+            )),
             _ => None,
         },
     }

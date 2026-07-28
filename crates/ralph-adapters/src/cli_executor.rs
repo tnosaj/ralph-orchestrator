@@ -7,6 +7,7 @@
 use crate::cli_backend::PromptMode;
 use crate::cli_backend::{CliBackend, OutputFormat};
 use crate::copilot_stream::CopilotStreamParser;
+use crate::opencode_stream::{OpencodeStreamEvent, OpencodeStreamParser, command_is_ralph_emit};
 #[cfg(unix)]
 use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
@@ -23,16 +24,34 @@ const TEXT_POST_EVENT_GRACE_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINATION_GRACE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Result of a CLI execution.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ExecutionResult {
     /// The full output from the CLI.
     pub output: String,
-    /// Whether the execution succeeded (exit code 0).
+    /// Whether the execution succeeded.
+    ///
+    /// For `OutputFormat::OpencodeStreamJson`, this is derived from a
+    /// structured `step_finish { reason: "stop" }` event — the process may
+    /// still be signal-terminated afterward (e.g. by the caller, once the
+    /// turn is known complete) without that being counted as failure. For
+    /// every other format, this is the raw process exit code combined with
+    /// `!timed_out`.
     pub success: bool,
     /// The exit code.
     pub exit_code: Option<i32>,
     /// Whether the execution was terminated due to timeout.
     pub timed_out: bool,
+    /// Total cost in USD, when the backend reports it (currently OpenCode
+    /// only via `OutputFormat::OpencodeStreamJson`; `0.0` otherwise).
+    pub total_cost_usd: f64,
+    /// Peak input tokens observed in a single step (OpenCode only).
+    pub input_tokens: u64,
+    /// Cumulative output tokens across all steps (OpenCode only).
+    pub output_tokens: u64,
+    /// Peak cache-read tokens observed in a single step (OpenCode only).
+    pub cache_read_tokens: u64,
+    /// Peak cache-write tokens observed in a single step (OpenCode only).
+    pub cache_write_tokens: u64,
 }
 
 /// Executor for running prompts through CLI backends.
@@ -146,6 +165,17 @@ impl CliExecutor {
         let mut stderr_done = stderr_task.is_none();
         let mut accumulated_output = String::new();
 
+        // OpencodeStreamJson-only tracking. `oc_saw_stop` is the real
+        // completion signal (a `step_finish` with `reason: "stop"`) —
+        // replaces the raw exit-code/timed_out check for this format.
+        let mut oc_saw_stop = false;
+        let mut oc_total_cost = 0.0f64;
+        let mut oc_input_tokens = 0u64;
+        let mut oc_output_tokens = 0u64;
+        let mut oc_cache_read_tokens = 0u64;
+        let mut oc_cache_write_tokens = 0u64;
+        let is_opencode_stream = self.backend.output_format == OutputFormat::OpencodeStreamJson;
+
         if let Some(duration) = timeout {
             debug!(
                 timeout_secs = duration.as_secs(),
@@ -197,6 +227,42 @@ impl CliExecutor {
                                 writeln!(output_writer)?;
                             }
                         }
+                    } else if is_opencode_stream {
+                        match OpencodeStreamParser::parse_line(&line) {
+                            Some(OpencodeStreamEvent::Text { text }) => {
+                                writeln!(output_writer, "{text}")?;
+                            }
+                            Some(OpencodeStreamEvent::ToolUse {
+                                command, exit_code, ..
+                            }) => {
+                                if let Some(command) = &command
+                                    && command_is_ralph_emit(command)
+                                    && exit_code != Some(0)
+                                {
+                                    warn!(
+                                        command = %command,
+                                        exit_code = ?exit_code,
+                                        "ralph emit tool call exited non-zero"
+                                    );
+                                }
+                            }
+                            Some(OpencodeStreamEvent::StepFinish {
+                                reason,
+                                tokens,
+                                cost,
+                            }) => {
+                                oc_total_cost += cost;
+                                oc_input_tokens = oc_input_tokens.max(tokens.input);
+                                oc_output_tokens += tokens.output;
+                                oc_cache_read_tokens = oc_cache_read_tokens.max(tokens.cache.read);
+                                oc_cache_write_tokens =
+                                    oc_cache_write_tokens.max(tokens.cache.write);
+                                if reason == "stop" {
+                                    oc_saw_stop = true;
+                                }
+                            }
+                            _ => {}
+                        }
                     } else {
                         writeln!(output_writer, "{line}")?;
                     }
@@ -242,11 +308,22 @@ impl CliExecutor {
             handle.await.map_err(join_error_to_io)??;
         }
 
+        let success = if is_opencode_stream {
+            oc_saw_stop
+        } else {
+            status.success() && !timed_out
+        };
+
         Ok(ExecutionResult {
             output: accumulated_output,
-            success: status.success() && !timed_out,
+            success,
             exit_code: status.code(),
             timed_out,
+            total_cost_usd: oc_total_cost,
+            input_tokens: oc_input_tokens,
+            output_tokens: oc_output_tokens,
+            cache_read_tokens: oc_cache_read_tokens,
+            cache_write_tokens: oc_cache_write_tokens,
         })
     }
 

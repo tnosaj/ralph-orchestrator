@@ -20,6 +20,8 @@ pub enum OutputFormat {
     CopilotStreamJson,
     /// Newline-delimited JSON stream (Pi with --mode json)
     PiStreamJson,
+    /// Newline-delimited JSON stream (OpenCode with --format json)
+    OpencodeStreamJson,
     /// Agent Client Protocol over stdio (Kiro v2)
     Acp,
 }
@@ -538,17 +540,21 @@ impl CliBackend {
     /// Uses OpenCode CLI with `run` subcommand. The prompt is passed as a
     /// positional argument after the subcommand:
     /// ```bash
-    /// opencode run "prompt text here"
+    /// opencode run --format json "prompt text here"
     /// ```
     ///
-    /// Output is plain text (no JSON streaming available).
+    /// Uses `--format json` for structured NDJSON output (`step_start`/
+    /// `text`/`tool_use`/`step_finish` events, parsed by
+    /// `opencode_stream.rs`) instead of plain text — gives a real
+    /// completion signal (`step_finish.reason == "stop"`) and per-tool-call
+    /// exit codes instead of a text heuristic plus a fixed grace timeout.
     pub fn opencode() -> Self {
         Self {
             command: "opencode".to_string(),
-            args: vec!["run".to_string()],
+            args: vec!["run".to_string(), "--format".to_string(), "json".to_string()],
             prompt_mode: PromptMode::Arg,
             prompt_flag: None, // Positional argument
-            output_format: OutputFormat::Text,
+            output_format: OutputFormat::OpencodeStreamJson,
             env_vars: vec![],
         }
     }

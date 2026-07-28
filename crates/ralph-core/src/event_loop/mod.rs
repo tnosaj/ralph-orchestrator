@@ -2562,27 +2562,30 @@ impl EventLoop {
             }
 
             if event.topic.as_str() == completion_topic {
-                if index + 1 == total_events {
-                    self.state.completion_requested = true;
-                    self.diagnostics.log_orchestration(
-                        self.state.iteration,
-                        "jsonl",
-                        crate::diagnostics::OrchestrationEvent::EventPublished {
-                            topic: event.topic.clone(),
-                        },
-                    );
-                    info!(
-                        topic = %event.topic,
-                        "Completion event detected in JSONL"
-                    );
-                } else {
-                    warn!(
-                        topic = %event.topic,
-                        index = index,
-                        total_events = total_events,
-                        "Completion event ignored because it was not the last event"
-                    );
-                }
+                // Completion is absorbing regardless of batch position: honoring
+                // it only when it happens to be the last line of whatever batch
+                // of events.jsonl was read in this pass is a positional accident,
+                // not a safety check — a later, unrelated no-op event landing in
+                // the same batch must not silently discard a real completion
+                // signal. `check_completion_event()` (called after event
+                // processing) already does the real validation — required
+                // events, unacknowledged guidance, persistent-mode suppression —
+                // and re-arms via `task.resume` if completion should be
+                // rejected, so gating on batch position here is redundant.
+                self.state.completion_requested = true;
+                self.diagnostics.log_orchestration(
+                    self.state.iteration,
+                    "jsonl",
+                    crate::diagnostics::OrchestrationEvent::EventPublished {
+                        topic: event.topic.clone(),
+                    },
+                );
+                info!(
+                    topic = %event.topic,
+                    index = index,
+                    total_events = total_events,
+                    "Completion event detected in JSONL"
+                );
                 continue;
             }
 
@@ -3045,27 +3048,22 @@ impl EventLoop {
             }
 
             if event.topic.as_str() == completion_topic {
-                if index + 1 == intervening_count {
-                    self.state.completion_requested = true;
-                    self.diagnostics.log_orchestration(
-                        self.state.iteration,
-                        "jsonl",
-                        crate::diagnostics::OrchestrationEvent::EventPublished {
-                            topic: event.topic.to_string(),
-                        },
-                    );
-                    info!(
-                        topic = %event.topic,
-                        "Completion event detected during robot wait"
-                    );
-                } else {
-                    warn!(
-                        topic = %event.topic,
-                        index = index,
-                        total_events = intervening_count,
-                        "Completion event during robot wait ignored because it was not the last event"
-                    );
-                }
+                // See the matching comment in build_prompt's main event-processing
+                // loop: completion is absorbing regardless of batch position.
+                self.state.completion_requested = true;
+                self.diagnostics.log_orchestration(
+                    self.state.iteration,
+                    "jsonl",
+                    crate::diagnostics::OrchestrationEvent::EventPublished {
+                        topic: event.topic.to_string(),
+                    },
+                );
+                info!(
+                    topic = %event.topic,
+                    index = index,
+                    total_events = intervening_count,
+                    "Completion event detected during robot wait"
+                );
                 continue;
             }
 
